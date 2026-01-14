@@ -7,7 +7,6 @@ import http from 'http';
 import httpProxy from 'http-proxy';
 import path from 'path';
 
-// CLI Konfigürasyonu
 program
   .name('api-tape')
   .description('Record and Replay HTTP API responses for offline development.')
@@ -24,18 +23,14 @@ const PORT = parseInt(opts.port);
 const MODE = opts.mode;
 const TAPES_DIR = path.resolve(opts.dir);
 
-// Proxy Sunucusu
 const proxy = httpProxy.createProxyServer({
   target: TARGET_URL,
   changeOrigin: true,
-  selfHandleResponse: true, // Cevabı yakalayıp kaydetmek için kritik ayar
+  selfHandleResponse: true,
 });
 
-// Tapes Klasörünü Hazırla
 fs.ensureDirSync(TAPES_DIR);
 
-// Hash Algoritması (Kaset İsmi)
-// METHOD + URL kombinasyonu unique bir hash oluşturur.
 const getTapeKey = (req: http.IncomingMessage): string => {
   const key = `${req.method}|${req.url}`;
   return crypto.createHash('md5').update(key).digest('hex');
@@ -47,24 +42,18 @@ const server = http.createServer((req, res) => {
   const tapeKey = getTapeKey(req);
   const tapePath = path.join(TAPES_DIR, `${tapeKey}.json`);
 
-  // ---------------------------------------------------------
-  // MODE: REPLAY (Kasetten Çal)
-  // ---------------------------------------------------------
   if (MODE === 'replay') {
     if (fs.existsSync(tapePath)) {
       try {
         const tape = fs.readJsonSync(tapePath);
-
-        // Headerları set et
         Object.keys(tape.headers).forEach(key => {
           res.setHeader(key, tape.headers[key]);
         });
 
-        // Replay olduğunu belli eden header (Debug için)
         res.setHeader('X-Api-Tape', 'Replayed');
 
         res.writeHead(tape.statusCode);
-        res.end(Buffer.from(tape.body, 'base64')); // Binary safe
+        res.end(Buffer.from(tape.body, 'base64'));
 
         console.log(`${timestamp()} ${chalk.green('↺ REPLAY')} ${req.method} ${req.url}`);
       } catch (e) {
@@ -80,9 +69,6 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ---------------------------------------------------------
-  // MODE: RECORD (Kaydet ve İlet)
-  // ---------------------------------------------------------
   if (MODE === 'record') {
     console.log(`${timestamp()} ${chalk.blue('● RECORD')} ${req.method} ${req.url}`);
 
@@ -94,7 +80,6 @@ const server = http.createServer((req, res) => {
   }
 });
 
-// Proxy Cevap Event'i (Sadece Record modunda çalışır)
 proxy.on('proxyRes', (proxyRes, req, res) => {
   const bodyChunks: any[] = [];
 
@@ -103,8 +88,6 @@ proxy.on('proxyRes', (proxyRes, req, res) => {
   proxyRes.on('end', () => {
     const bodyBuffer = Buffer.concat(bodyChunks);
 
-    // Encoding (Gzip/Brotli) varsa açmaya çalışma, direkt raw kaydet.
-    // Ancak JSON'a yazarken base64 kullan ki binary data (resim vs) bozulmasın.
     const tapeData = {
       meta: {
         url: req.url,
@@ -121,7 +104,6 @@ proxy.on('proxyRes', (proxyRes, req, res) => {
 
     fs.writeJsonSync(tapePath, tapeData, { spaces: 2 });
 
-    // Cevabı asıl istemciye dön
     Object.keys(proxyRes.headers).forEach(key => {
       res.setHeader(key, proxyRes.headers[key] as string);
     });
