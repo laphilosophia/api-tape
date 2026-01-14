@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+.npmrc
+
+# Logs
+*.log
+npm-debug.log*
+
+# Coverage
+coverage/
+
+# Env
+.env
+.env.local
+
+# Cache
+.cache/
+.turbo/
+
+# Internals
+docs
+docs/
+
+# API Tape recordings
+tapes/

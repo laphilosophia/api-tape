@@ -1,0 +1,52 @@
+{
+  "name": "@laphilosophia/api-tape",
+  "version": "1.0.0",
+  "description": "Record and Replay HTTP API responses for offline development",
+  "main": "dist/index.js",
+  "bin": {
+    "tape": "./dist/index.js",
+    "api-tape": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs --clean",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "api",
+    "mock",
+    "record",
+    "replay",
+    "proxy",
+    "offline",
+    "testing",
+    "http",
+    "vcr"
+  ],
+  "author": "Erdem Arslan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/laphilosophia/api-tape.git"
+  },
+  "homepage": "https://github.com/laphilosophia/api-tape#readme",
+  "bugs": {
+    "url": "https://github.com/laphilosophia/api-tape/issues"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "commander": "^14.0.2",
+    "fs-extra": "^11.3.3",
+    "http-proxy": "^1.18.1"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/http-proxy": "^1.17.17",
+    "@types/node": "^25.0.8",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  }
+}
