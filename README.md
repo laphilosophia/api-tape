@@ -24,7 +24,7 @@ API Tape is a zero-config CLI tool that acts as a transparent HTTP proxy. It rec
 ## Installation
 
 ```bash
-npm install -g api-tape
+npm install -g @laphilosophia/api-tape
 ```
 
 Or use it directly with npx:
