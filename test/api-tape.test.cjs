@@ -305,6 +305,50 @@ test('record mode redacts configured response headers in saved tape', async () =
   }
 })
 
+test('record mode redacts configured json paths in saved tape body', async () => {
+  const upstreamPort = await getFreePort()
+  const proxyPort = await getFreePort()
+  const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'api-tape-redact-json-'))
+
+  const upstream = http.createServer((_, res) => {
+    res.setHeader('content-type', 'application/json')
+    res.end(
+      JSON.stringify({ user: { profile: { email: 'dev@example.com' } }, token: 'secret-token' }),
+    )
+  })
+  await new Promise((resolve) => upstream.listen(upstreamPort, resolve))
+
+  let cli
+  try {
+    cli = await startCli({
+      target: `http://127.0.0.1:${upstreamPort}`,
+      port: proxyPort,
+      dir: tmpDir,
+      mode: 'record',
+      extraArgs: ['--redact-json-path', 'user.profile.email,token'],
+    })
+
+    const response = await requestWithRetry(`http://127.0.0.1:${proxyPort}/users/1`)
+    assert.equal(response.statusCode, 200)
+
+    await stopProcess(cli.child)
+
+    const files = (await fsp.readdir(tmpDir)).filter((name) => name.endsWith('.json'))
+    assert.equal(files.length, 1)
+
+    const saved = JSON.parse(await fsp.readFile(path.join(tmpDir, files[0]), 'utf8'))
+    const savedBody = JSON.parse(Buffer.from(saved.body, 'base64').toString('utf8'))
+
+    assert.equal(savedBody.user.profile.email, '[REDACTED]')
+    assert.equal(savedBody.token, '[REDACTED]')
+    assert.deepEqual(saved.meta.redactionsApplied.jsonPaths.sort(), ['token', 'user.profile.email'])
+  } finally {
+    await stopProcess(cli && cli.child)
+    await new Promise((resolve) => upstream.close(resolve))
+    await fsp.rm(tmpDir, { recursive: true, force: true })
+  }
+})
+
 test('normalized match strategy replays regardless of query order', async () => {
   const upstreamPort = await getFreePort()
   const proxyPort = await getFreePort()

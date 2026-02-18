@@ -82,6 +82,74 @@ const redactHeaders = (
   return nextHeaders
 }
 
+const readHeaderValue = (headerValue: string | string[] | undefined): string => {
+  if (Array.isArray(headerValue)) {
+    return headerValue.join(',')
+  }
+
+  return headerValue || ''
+}
+
+const redactJsonAtPath = (target: unknown, pathExpression: string): boolean => {
+  const segments = pathExpression
+    .split('.')
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+  if (segments.length === 0 || target === null || typeof target !== 'object') {
+    return false
+  }
+
+  let cursor: any = target
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const key = segments[index]
+    if (cursor === null || typeof cursor !== 'object' || !(key in cursor)) {
+      return false
+    }
+    cursor = cursor[key]
+  }
+
+  const leaf = segments[segments.length - 1]
+  if (cursor !== null && typeof cursor === 'object' && leaf in cursor) {
+    cursor[leaf] = '[REDACTED]'
+    return true
+  }
+
+  return false
+}
+
+const redactJsonBody = (
+  bodyBuffer: Buffer,
+  contentTypeHeader: string | string[] | undefined,
+  redactedJsonPaths: string[],
+): { bodyBuffer: Buffer; appliedJsonPaths: string[] } => {
+  if (redactedJsonPaths.length === 0) {
+    return { bodyBuffer, appliedJsonPaths: [] }
+  }
+
+  const contentType = readHeaderValue(contentTypeHeader).toLowerCase()
+  if (!contentType.includes('application/json')) {
+    return { bodyBuffer, appliedJsonPaths: [] }
+  }
+
+  try {
+    const parsed = JSON.parse(bodyBuffer.toString('utf8'))
+    const appliedJsonPaths = redactedJsonPaths.filter((jsonPath) =>
+      redactJsonAtPath(parsed, jsonPath),
+    )
+
+    if (appliedJsonPaths.length === 0) {
+      return { bodyBuffer, appliedJsonPaths: [] }
+    }
+
+    return {
+      bodyBuffer: Buffer.from(JSON.stringify(parsed)),
+      appliedJsonPaths,
+    }
+  } catch {
+    return { bodyBuffer, appliedJsonPaths: [] }
+  }
+}
+
 const ensureSchemaCompatibility = (record: TapeRecord, tapePath: string): void => {
   const schemaVersion = record.schemaVersion ?? 0
 
@@ -95,22 +163,36 @@ const createTapeRecord = (
   proxyRes: http.IncomingMessage,
   bodyBuffer: Buffer,
   redactedHeaders: string[],
+  redactedJsonPaths: string[],
   matchStrategy: MatchStrategy,
-): TapeRecord => ({
-  schemaVersion: CURRENT_SCHEMA_VERSION,
-  meta: {
-    url: req.url,
-    method: req.method,
-    timestamp: new Date().toISOString(),
-    matchStrategy,
-  },
-  statusCode: proxyRes.statusCode || 200,
-  headers: redactHeaders(
+): TapeRecord => {
+  const tapeHeaders = redactHeaders(
     proxyRes.headers as Record<string, string | string[] | undefined>,
     redactedHeaders,
-  ),
-  body: bodyBuffer.toString('base64'),
-})
+  )
+  const { bodyBuffer: redactedBodyBuffer, appliedJsonPaths } = redactJsonBody(
+    bodyBuffer,
+    proxyRes.headers['content-type'],
+    redactedJsonPaths,
+  )
+
+  return {
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    meta: {
+      url: req.url,
+      method: req.method,
+      timestamp: new Date().toISOString(),
+      matchStrategy,
+      redactionsApplied: {
+        headers: redactedHeaders,
+        jsonPaths: appliedJsonPaths,
+      },
+    },
+    statusCode: proxyRes.statusCode || 200,
+    headers: tapeHeaders,
+    body: redactedBodyBuffer.toString('base64'),
+  }
+}
 
 const buildMetricsSnapshot = (metrics: ServeMetrics) => ({
   totalRequests: metrics.totalRequests,
@@ -145,6 +227,7 @@ const runServe = (opts: ServeOptions): void => {
   const tapesDir = path.resolve(opts.dir)
   const recordOnMiss = opts.recordOnMiss
   const redactedHeaders = parseCsv(opts.redactHeader)
+  const redactedJsonPaths = parseCsv(opts.redactJsonPath)
   const statsIntervalSec = parseNonNegativeInt(opts.statsInterval, 'stats-interval')
   const statsJson = opts.statsJson
   const matchStrategy = opts.matchStrategy
@@ -293,7 +376,14 @@ const runServe = (opts: ServeOptions): void => {
       const shouldRecord = recordByRequest.get(req) ?? true
 
       if (shouldRecord) {
-        const tapeData = createTapeRecord(req, proxyRes, bodyBuffer, redactedHeaders, matchStrategy)
+        const tapeData = createTapeRecord(
+          req,
+          proxyRes,
+          bodyBuffer,
+          redactedHeaders,
+          redactedJsonPaths,
+          matchStrategy,
+        )
         const tapeKey = getTapeKey(req, matchStrategy)
         const tapePath = path.join(tapesDir, `${tapeKey}.json`)
         fs.writeJsonSync(tapePath, tapeData, { spaces: 2 })
@@ -354,6 +444,9 @@ const runServe = (opts: ServeOptions): void => {
   }
   if (redactedHeaders.length > 0) {
     console.log(`   ${chalk.dim('Redact Headers:')} ${redactedHeaders.join(', ')}`)
+  }
+  if (redactedJsonPaths.length > 0) {
+    console.log(`   ${chalk.dim('Redact JSON Paths:')} ${redactedJsonPaths.join(', ')}`)
   }
   if (statsIntervalSec > 0) {
     console.log(`   ${chalk.dim('Stats Every:')} ${statsIntervalSec}s`)
@@ -471,6 +564,11 @@ const addServeOptions = (command: Command): Command =>
       'Comma-separated response header names to redact before saving',
       '',
     )
+    .option(
+      '--redact-json-path <paths>',
+      'Comma-separated JSON paths to redact in JSON response bodies',
+      '',
+    )
     .option('--stats-interval <seconds>', 'Emit runtime stats every N seconds (0 disables)', '0')
     .option('--stats-json', 'Emit stats in JSON format', false)
     .option('--match-strategy <strategy>', 'Tape matching strategy: exact or normalized', 'exact')
@@ -483,7 +581,7 @@ const run = (): void => {
     const legacy = addServeOptions(new Command())
       .name('api-tape')
       .description('Record and Replay HTTP API responses for offline development.')
-      .version('1.3.0')
+      .version('1.5.0')
       .action((options: ServeOptions) => {
         runServe(options)
       })
@@ -497,7 +595,7 @@ const run = (): void => {
   program
     .name('api-tape')
     .description('Record and Replay HTTP API responses for offline development.')
-    .version('1.3.0')
+    .version('1.5.0')
 
   addServeOptions(program.command('serve').description('Run API Tape proxy server')).action(
     (options: ServeOptions) => {

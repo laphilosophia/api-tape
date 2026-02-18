@@ -8,6 +8,10 @@ export interface TapeRecord {
     method?: string
     timestamp?: string
     matchStrategy?: MatchStrategy
+    redactionsApplied?: {
+      headers: string[]
+      jsonPaths: string[]
+    }
   }
   statusCode: number
   headers: Record<string, string | string[] | undefined>
@@ -21,6 +25,7 @@ export interface ServeOptions {
   dir: string
   recordOnMiss: boolean
   redactHeader: string
+  redactJsonPath: string
   statsInterval: string
   statsJson: boolean
   matchStrategy: MatchStrategy
