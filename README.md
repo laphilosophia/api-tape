@@ -1,22 +1,22 @@
-# 📼 API Tape
+# API Tape
 
 **Record and Replay HTTP API responses for offline development.**
 
 API Tape is a zero-config CLI tool that acts as a transparent HTTP proxy. It records API responses to local JSON files ("tapes") and replays them instantly—perfect for offline development, flaky API testing, and reproducible demos.
 
-## ✨ Features
+## Features
 
-- 🎬 **Record Mode** — Proxies requests to your target API and saves responses
-- 🔄 **Replay Mode** — Serves cached responses instantly from disk
-- 🔀 **Hybrid Mode** — Replays cached tapes, falls back to upstream on cache miss
-- 🧰 **Tape Management Commands** — List, inspect, clear, and prune tapes from CLI
-- 🔐 **Header Redaction** — Mask sensitive response headers before writing tapes
-- 📦 **Zero Config** — Works out of the box with sensible defaults
-- 🔒 **Binary Safe** — Handles images, compressed responses, and any content type
-- 🏷️ **Replay Header** — Responses include `X-Api-Tape: Replayed` for easy debugging
-- 🧱 **Versioned Tape Schema** — Each tape includes `schemaVersion` for compatibility checks
+- **Record Mode** — Proxies requests to your target API and saves responses
+- **Replay Mode** — Serves cached responses instantly from disk
+- **Hybrid Mode** — Replays cached tapes, falls back to upstream on cache miss
+- **Tape Management Commands** — List, inspect, clear, and prune tapes from CLI
+- **Header Redaction** — Mask sensitive response headers before writing tapes
+- **Zero Config** — Works out of the box with sensible defaults
+- **Binary Safe** — Handles images, compressed responses, and any content type
+- **Replay Header** — Responses include `X-Api-Tape: Replayed` for easy debugging
+- **Versioned Tape Schema** — Each tape includes `schemaVersion` for compatibility checks
 
-## 📦 Installation
+## Installation
 
 ```bash
 npm install -g api-tape
@@ -28,7 +28,7 @@ Or use it directly with npx:
 npx api-tape --target "https://api.example.com" --mode record
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Step 1: Record API Responses
 
@@ -70,7 +70,7 @@ tape --target "https://jsonplaceholder.typicode.com" --mode hybrid --record-on-m
 - If tape is missing → upstream request is proxied.
 - With `--record-on-miss true`, miss responses are automatically saved as new tapes.
 
-## ⚙️ CLI Options
+## CLI Options
 
 ### Serve command
 
@@ -94,7 +94,7 @@ tape tape clear --yes --dir ./tapes
 tape tape prune --older-than 30 --dir ./tapes
 ```
 
-## 📁 Tape Format
+## Tape Format
 
 Each tape is a JSON file named with an MD5 hash of `METHOD|URL`:
 
@@ -114,20 +114,20 @@ Each tape is a JSON file named with an MD5 hash of `METHOD|URL`:
 
 The body is base64-encoded for binary safety.
 
-## 🧪 Development
+## Development
 
 ```bash
 npm run build
 npm test
 ```
 
-## 🎯 Use Cases
+## Use Cases
 
 - **Offline Development** — Work without internet or VPN
 - **Flaky API Testing** — Eliminate network inconsistencies in tests
 - **Demo Environments** — Reproducible API responses for presentations
 - **Rate Limit Bypass** — Develop against recorded responses
 
-## 📄 License
+## License
 
 MIT © [Erdem Arslan](https://github.com/laphilosophia)
