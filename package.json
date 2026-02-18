@@ -1,6 +1,6 @@
 {
   "name": "@laphilosophia/api-tape",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Record and Replay HTTP API responses for offline development",
   "main": "dist/index.js",
   "bin": {
@@ -15,7 +15,8 @@
   },
   "scripts": {
     "build": "tsup src/index.ts --format cjs --clean",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "test": "npm run build && node --test test/**/*.test.cjs"
   },
   "keywords": [
     "api",

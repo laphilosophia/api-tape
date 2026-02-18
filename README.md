@@ -8,9 +8,11 @@ API Tape is a zero-config CLI tool that acts as a transparent HTTP proxy. It rec
 
 - 🎬 **Record Mode** — Proxies requests to your target API and saves responses
 - 🔄 **Replay Mode** — Serves cached responses instantly from disk
+- 🔀 **Hybrid Mode** — Replays cached tapes, falls back to upstream on cache miss
 - 📦 **Zero Config** — Works out of the box with sensible defaults
 - 🔒 **Binary Safe** — Handles images, compressed responses, and any content type
 - 🏷️ **Replay Header** — Responses include `X-Api-Tape: Replayed` for easy debugging
+- 🧱 **Versioned Tape Schema** — Each tape includes `schemaVersion` for compatibility checks
 
 ## 📦 Installation
 
@@ -52,16 +54,29 @@ tape --target "https://jsonplaceholder.typicode.com" --mode replay
 curl http://localhost:8080/todos/1
 ```
 
-You'll see `↺ REPLAY GET /todos/1` — the response comes from disk, no network needed!
+You'll see `↺ REPLAY_HIT GET /todos/1` — the response comes from disk, no network needed!
+
+### Step 3: Hybrid Mode (Replay + Fallback)
+
+Run in hybrid mode to replay from disk and fallback to upstream when a tape is missing:
+
+```bash
+tape --target "https://jsonplaceholder.typicode.com" --mode hybrid --record-on-miss true
+```
+
+- If a tape exists → replayed instantly.
+- If tape is missing → upstream request is proxied.
+- With `--record-on-miss true`, miss responses are automatically saved as new tapes.
 
 ## ⚙️ CLI Options
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `-t, --target <url>` | Target API URL **(required)** | — |
-| `-m, --mode <mode>` | Operation mode: `record` or `replay` | `replay` |
-| `-p, --port <number>` | Local server port | `8080` |
-| `-d, --dir <path>` | Directory to save tapes | `./tapes` |
+| Option                       | Description                                                 | Default   |
+| ---------------------------- | ----------------------------------------------------------- | --------- |
+| `-t, --target <url>`         | Target API URL **(required)**                               | —         |
+| `-m, --mode <mode>`          | Operation mode: `record`, `replay`, or `hybrid`             | `replay`  |
+| `-p, --port <number>`        | Local server port                                           | `8080`    |
+| `-d, --dir <path>`           | Directory to save tapes                                     | `./tapes` |
+| `--record-on-miss <boolean>` | In hybrid mode, save upstream response when tape is missing | `true`    |
 
 ## 📁 Tape Format
 
@@ -69,6 +84,7 @@ Each tape is a JSON file named with an MD5 hash of `METHOD|URL`:
 
 ```json
 {
+  "schemaVersion": 1,
   "meta": {
     "url": "/todos/1",
     "method": "GET",
@@ -81,6 +97,13 @@ Each tape is a JSON file named with an MD5 hash of `METHOD|URL`:
 ```
 
 The body is base64-encoded for binary safety.
+
+## 🧪 Development
+
+```bash
+npm run build
+npm test
+```
 
 ## 🎯 Use Cases
 
