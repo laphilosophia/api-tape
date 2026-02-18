@@ -26,6 +26,16 @@ export const parsePositiveInt = (value: string, label: string): number => {
   return parsed
 }
 
+export const parseNonNegativeInt = (value: string, label: string): number => {
+  const parsed = parseInt(value, 10)
+
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${label} must be a non-negative integer.`)
+  }
+
+  return parsed
+}
+
 export const parseCsv = (value: string): string[] =>
   value
     .split(',')

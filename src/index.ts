@@ -7,8 +7,14 @@ import http from 'http'
 import httpProxy from 'http-proxy'
 import path from 'path'
 import { CURRENT_SCHEMA_VERSION } from './constants'
-import { ServeOptions, TapeRecord } from './types'
-import { parseBooleanOption, parseCsv, parsePositiveInt, timestamp } from './utils'
+import { ServeMetrics, ServeOptions, TapeRecord } from './types'
+import {
+  parseBooleanOption,
+  parseCsv,
+  parseNonNegativeInt,
+  parsePositiveInt,
+  timestamp,
+} from './utils'
 
 const getTapeKey = (req: http.IncomingMessage): string => {
   const key = `${req.method}|${req.url}`
@@ -65,6 +71,32 @@ const createTapeRecord = (
   body: bodyBuffer.toString('base64'),
 })
 
+const buildMetricsSnapshot = (metrics: ServeMetrics) => ({
+  totalRequests: metrics.totalRequests,
+  replayHits: metrics.replayHits,
+  replayMisses: metrics.replayMisses,
+  upstreamRequests: metrics.upstreamRequests,
+  upstreamErrors: metrics.upstreamErrors,
+  completedResponses: metrics.completedResponses,
+  averageLatencyMs:
+    metrics.completedResponses === 0
+      ? 0
+      : Number((metrics.totalLatencyMs / metrics.completedResponses).toFixed(2)),
+})
+
+const printMetrics = (metrics: ServeMetrics, asJson: boolean, prefix = 'STATS'): void => {
+  const snapshot = buildMetricsSnapshot(metrics)
+
+  if (asJson) {
+    console.log(JSON.stringify({ event: prefix, ...snapshot }))
+    return
+  }
+
+  console.log(
+    `${timestamp()} ${chalk.cyan(prefix)} total=${snapshot.totalRequests} replay_hit=${snapshot.replayHits} replay_miss=${snapshot.replayMisses} upstream=${snapshot.upstreamRequests} upstream_errors=${snapshot.upstreamErrors} avg_latency_ms=${snapshot.averageLatencyMs}`,
+  )
+}
+
 const runServe = (opts: ServeOptions): void => {
   const targetUrl = opts.target
   const port = parsePositiveInt(opts.port, 'Port')
@@ -72,6 +104,8 @@ const runServe = (opts: ServeOptions): void => {
   const tapesDir = path.resolve(opts.dir)
   const recordOnMiss = opts.recordOnMiss
   const redactedHeaders = parseCsv(opts.redactHeader)
+  const statsIntervalSec = parseNonNegativeInt(opts.statsInterval, 'stats-interval')
+  const statsJson = opts.statsJson
 
   const validModes: Mode[] = ['record', 'replay', 'hybrid']
   if (!validModes.includes(mode)) {
@@ -87,6 +121,16 @@ const runServe = (opts: ServeOptions): void => {
   })
 
   const recordByRequest = new WeakMap<http.IncomingMessage, boolean>()
+  const requestStartByResponse = new WeakMap<http.ServerResponse, number>()
+  const metrics: ServeMetrics = {
+    totalRequests: 0,
+    replayHits: 0,
+    replayMisses: 0,
+    upstreamRequests: 0,
+    upstreamErrors: 0,
+    totalLatencyMs: 0,
+    completedResponses: 0,
+  }
 
   const replayTape = (
     req: http.IncomingMessage,
@@ -110,6 +154,7 @@ const runServe = (opts: ServeOptions): void => {
       res.writeHead(tape.statusCode)
       res.end(Buffer.from(tape.body, 'base64'))
 
+      metrics.replayHits += 1
       console.log(`${timestamp()} ${chalk.green('↺ REPLAY_HIT')} ${req.method} ${req.url}`)
       return true
     } catch (error) {
@@ -131,9 +176,11 @@ const runServe = (opts: ServeOptions): void => {
     logPrefix: string,
   ): void => {
     recordByRequest.set(req, shouldRecord)
+    metrics.upstreamRequests += 1
     console.log(`${timestamp()} ${logPrefix} ${req.method} ${req.url}`)
 
     proxy.web(req, res, {}, (error) => {
+      metrics.upstreamErrors += 1
       console.error(chalk.red('Proxy Error:'), error.message)
       res.statusCode = 502
       res.end('Proxy Error')
@@ -141,6 +188,17 @@ const runServe = (opts: ServeOptions): void => {
   }
 
   const server = http.createServer((req, res) => {
+    metrics.totalRequests += 1
+    requestStartByResponse.set(res, Date.now())
+
+    res.on('finish', () => {
+      const startedAt = requestStartByResponse.get(res)
+      if (typeof startedAt === 'number') {
+        metrics.totalLatencyMs += Date.now() - startedAt
+        metrics.completedResponses += 1
+      }
+    })
+
     const tapeKey = getTapeKey(req)
     const tapePath = path.join(tapesDir, `${tapeKey}.json`)
 
@@ -148,6 +206,7 @@ const runServe = (opts: ServeOptions): void => {
       const hit = replayTape(req, res, tapePath)
 
       if (!hit) {
+        metrics.replayMisses += 1
         console.log(`${timestamp()} ${chalk.red('✘ REPLAY_MISS')} ${req.method} ${req.url}`)
         res.statusCode = 404
         res.end(`Tape not found for: ${req.method} ${req.url}`)
@@ -165,6 +224,7 @@ const runServe = (opts: ServeOptions): void => {
       return
     }
 
+    metrics.replayMisses += 1
     console.log(`${timestamp()} ${chalk.yellow('⇢ REPLAY_MISS')} ${req.method} ${req.url}`)
     proxyRequest(
       req,
@@ -199,6 +259,33 @@ const runServe = (opts: ServeOptions): void => {
     })
   })
 
+  let metricsTimer: NodeJS.Timeout | undefined
+
+  if (statsIntervalSec > 0) {
+    metricsTimer = setInterval(() => {
+      printMetrics(metrics, statsJson)
+    }, statsIntervalSec * 1000)
+  }
+
+  const shutdown = (signal: NodeJS.Signals): void => {
+    if (metricsTimer) {
+      clearInterval(metricsTimer)
+      metricsTimer = undefined
+    }
+
+    printMetrics(metrics, statsJson, 'FINAL_STATS')
+    server.close(() => {
+      process.exit(0)
+    })
+
+    setTimeout(() => {
+      process.exit(0)
+    }, 2000).unref()
+  }
+
+  process.once('SIGINT', () => shutdown('SIGINT'))
+  process.once('SIGTERM', () => shutdown('SIGTERM'))
+
   console.log(chalk.bold(`\n📼 API Tape Running`))
   console.log(
     `   ${chalk.dim('Mode:')}   ${
@@ -217,6 +304,12 @@ const runServe = (opts: ServeOptions): void => {
   }
   if (redactedHeaders.length > 0) {
     console.log(`   ${chalk.dim('Redact Headers:')} ${redactedHeaders.join(', ')}`)
+  }
+  if (statsIntervalSec > 0) {
+    console.log(`   ${chalk.dim('Stats Every:')} ${statsIntervalSec}s`)
+  }
+  if (statsJson) {
+    console.log(`   ${chalk.dim('Stats Format:')} json`)
   }
   console.log('')
 
@@ -326,6 +419,8 @@ const addServeOptions = (command: Command): Command =>
       'Comma-separated response header names to redact before saving',
       '',
     )
+    .option('--stats-interval <seconds>', 'Emit runtime stats every N seconds (0 disables)', '0')
+    .option('--stats-json', 'Emit stats in JSON format', false)
 
 const run = (): void => {
   const argv = process.argv
@@ -335,7 +430,7 @@ const run = (): void => {
     const legacy = addServeOptions(new Command())
       .name('api-tape')
       .description('Record and Replay HTTP API responses for offline development.')
-      .version('1.2.0')
+      .version('1.3.0')
       .action((options: ServeOptions) => {
         runServe(options)
       })
@@ -349,7 +444,7 @@ const run = (): void => {
   program
     .name('api-tape')
     .description('Record and Replay HTTP API responses for offline development.')
-    .version('1.2.0')
+    .version('1.3.0')
 
   addServeOptions(program.command('serve').description('Run API Tape proxy server')).action(
     (options: ServeOptions) => {

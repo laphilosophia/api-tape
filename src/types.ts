@@ -19,4 +19,16 @@ export interface ServeOptions {
   dir: string
   recordOnMiss: boolean
   redactHeader: string
+  statsInterval: string
+  statsJson: boolean
+}
+
+export interface ServeMetrics {
+  totalRequests: number
+  replayHits: number
+  replayMisses: number
+  upstreamRequests: number
+  upstreamErrors: number
+  totalLatencyMs: number
+  completedResponses: number
 }

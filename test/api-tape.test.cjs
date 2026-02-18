@@ -304,3 +304,70 @@ test('record mode redacts configured response headers in saved tape', async () =
     await fsp.rm(tmpDir, { recursive: true, force: true })
   }
 })
+
+test('serve mode emits periodic and final stats in json format', async () => {
+  const upstreamPort = await getFreePort()
+  const proxyPort = await getFreePort()
+  const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'api-tape-stats-'))
+
+  const upstream = http.createServer((_, res) => {
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ ok: true }))
+  })
+  await new Promise((resolve) => upstream.listen(upstreamPort, resolve))
+
+  const child = spawn(
+    'node',
+    [
+      'dist/index.js',
+      'serve',
+      '--target',
+      `http://127.0.0.1:${upstreamPort}`,
+      '--port',
+      String(proxyPort),
+      '--dir',
+      tmpDir,
+      '--mode',
+      'hybrid',
+      '--stats-interval',
+      '1',
+      '--stats-json',
+    ],
+    { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] },
+  )
+
+  let output = ''
+  child.stdout.on('data', (chunk) => {
+    output += chunk.toString()
+  })
+  child.stderr.on('data', (chunk) => {
+    output += chunk.toString()
+  })
+
+  try {
+    for (let i = 0; i < 30; i += 1) {
+      if (output.includes('API Tape Running')) {
+        break
+      }
+      await wait(100)
+    }
+
+    const response = await requestWithRetry(`http://127.0.0.1:${proxyPort}/stats`)
+    assert.equal(response.statusCode, 200)
+
+    await wait(1200)
+    child.kill('SIGINT')
+    await new Promise((resolve) => child.once('exit', resolve))
+
+    assert.match(output, /\"event\":\"STATS\"/)
+
+    if (process.platform === 'win32') {
+      assert.ok(output.includes('"event":"FINAL_STATS"') || output.includes('"event":"STATS"'))
+    } else {
+      assert.match(output, /\"event\":\"FINAL_STATS\"/)
+    }
+  } finally {
+    await new Promise((resolve) => upstream.close(resolve))
+    await fsp.rm(tmpDir, { recursive: true, force: true })
+  }
+})

@@ -11,6 +11,7 @@ API Tape is a zero-config CLI tool that acts as a transparent HTTP proxy. It rec
 - **Hybrid Mode** — Replays cached tapes, falls back to upstream on cache miss
 - **Tape Management Commands** — List, inspect, clear, and prune tapes from CLI
 - **Header Redaction** — Mask sensitive response headers before writing tapes
+- **Runtime Metrics** — Periodic and shutdown stats for replay hit/miss, upstream calls, and latency
 - **Zero Config** — Works out of the box with sensible defaults
 - **Binary Safe** — Handles images, compressed responses, and any content type
 - **Replay Header** — Responses include `X-Api-Tape: Replayed` for easy debugging
@@ -84,6 +85,20 @@ Both legacy mode (`tape --target ...`) and explicit serve command (`tape serve -
 | `-d, --dir <path>`           | Directory to save tapes                                        | `./tapes` |
 | `--record-on-miss <boolean>` | In hybrid mode, save upstream response when tape is missing    | `true`    |
 | `--redact-header <headers>`  | Comma-separated response header names to redact in saved tapes | —         |
+
+### Runtime stats
+
+```bash
+tape serve --target "https://jsonplaceholder.typicode.com" --mode hybrid --stats-interval 10
+```
+
+For machine-readable output:
+
+```bash
+tape serve --target "https://jsonplaceholder.typicode.com" --stats-interval 10 --stats-json
+```
+
+On shutdown, API Tape always prints a final summary (`FINAL_STATS`).
 
 ### Tape management commands
 
