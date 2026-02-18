@@ -16,6 +16,7 @@ API Tape is a zero-config CLI tool that acts as a transparent HTTP proxy. It rec
 - **Binary Safe** — Handles images, compressed responses, and any content type
 - **Replay Header** — Responses include `X-Api-Tape: Replayed` for easy debugging
 - **Versioned Tape Schema** — Each tape includes `schemaVersion` for compatibility checks
+- **Match Strategies** — `exact` and `normalized` matching for better replay hit rates
 
 ## Installation
 
@@ -77,14 +78,15 @@ tape --target "https://jsonplaceholder.typicode.com" --mode hybrid --record-on-m
 
 Both legacy mode (`tape --target ...`) and explicit serve command (`tape serve --target ...`) are supported.
 
-| Option                       | Description                                                    | Default   |
-| ---------------------------- | -------------------------------------------------------------- | --------- |
-| `-t, --target <url>`         | Target API URL **(required)**                                  | —         |
-| `-m, --mode <mode>`          | Operation mode: `record`, `replay`, or `hybrid`                | `replay`  |
-| `-p, --port <number>`        | Local server port                                              | `8080`    |
-| `-d, --dir <path>`           | Directory to save tapes                                        | `./tapes` |
-| `--record-on-miss <boolean>` | In hybrid mode, save upstream response when tape is missing    | `true`    |
-| `--redact-header <headers>`  | Comma-separated response header names to redact in saved tapes | —         |
+| Option                        | Description                                                    | Default   |
+| ----------------------------- | -------------------------------------------------------------- | --------- |
+| `-t, --target <url>`          | Target API URL **(required)**                                  | —         |
+| `-m, --mode <mode>`           | Operation mode: `record`, `replay`, or `hybrid`                | `replay`  |
+| `-p, --port <number>`         | Local server port                                              | `8080`    |
+| `-d, --dir <path>`            | Directory to save tapes                                        | `./tapes` |
+| `--record-on-miss <boolean>`  | In hybrid mode, save upstream response when tape is missing    | `true`    |
+| `--redact-header <headers>`   | Comma-separated response header names to redact in saved tapes | —         |
+| `--match-strategy <strategy>` | Tape matching strategy: `exact` or `normalized`                | `exact`   |
 
 ### Runtime stats
 
@@ -99,6 +101,11 @@ tape serve --target "https://jsonplaceholder.typicode.com" --stats-interval 10 -
 ```
 
 On shutdown, API Tape always prints a final summary (`FINAL_STATS`).
+
+### Match strategy
+
+- `exact` (default): hashes `METHOD|URL` as-is.
+- `normalized`: sorts query params before hashing, so `/search?a=1&b=2` and `/search?b=2&a=1` map to the same tape.
 
 ### Tape management commands
 
@@ -119,7 +126,8 @@ Each tape is a JSON file named with an MD5 hash of `METHOD|URL`:
   "meta": {
     "url": "/todos/1",
     "method": "GET",
-    "timestamp": "2026-01-14T19:12:39.000Z"
+    "timestamp": "2026-01-14T19:12:39.000Z",
+    "matchStrategy": "normalized"
   },
   "statusCode": 200,
   "headers": { ... },
@@ -135,6 +143,10 @@ The body is base64-encoded for binary safety.
 npm run build
 npm test
 ```
+
+## CI
+
+A GitHub Actions workflow runs `npm test` on both Linux and Windows for pushes and pull requests.
 
 ## Use Cases
 

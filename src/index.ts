@@ -7,7 +7,7 @@ import http from 'http'
 import httpProxy from 'http-proxy'
 import path from 'path'
 import { CURRENT_SCHEMA_VERSION } from './constants'
-import { ServeMetrics, ServeOptions, TapeRecord } from './types'
+import { MatchStrategy, ServeMetrics, ServeOptions, TapeRecord } from './types'
 import {
   parseBooleanOption,
   parseCsv,
@@ -16,8 +16,47 @@ import {
   timestamp,
 } from './utils'
 
-const getTapeKey = (req: http.IncomingMessage): string => {
-  const key = `${req.method}|${req.url}`
+const normalizeUrl = (rawUrl: string | undefined): string => {
+  if (!rawUrl) {
+    return '/'
+  }
+
+  const [pathname, query = ''] = rawUrl.split('?')
+
+  if (!query) {
+    return pathname || '/'
+  }
+
+  const params = new URLSearchParams(query)
+  const normalizedEntries = Array.from(params.entries()).sort(([aKey, aValue], [bKey, bValue]) => {
+    if (aKey === bKey) {
+      return aValue.localeCompare(bValue)
+    }
+
+    return aKey.localeCompare(bKey)
+  })
+
+  const normalized = new URLSearchParams()
+  normalizedEntries.forEach(([key, value]) => {
+    normalized.append(key, value)
+  })
+
+  const normalizedQuery = normalized.toString()
+  return normalizedQuery ? `${pathname || '/'}?${normalizedQuery}` : pathname || '/'
+}
+
+const buildRequestSignature = (req: http.IncomingMessage, matchStrategy: MatchStrategy): string => {
+  const method = req.method || 'GET'
+
+  if (matchStrategy === 'normalized') {
+    return `${method}|${normalizeUrl(req.url)}`
+  }
+
+  return `${method}|${req.url}`
+}
+
+const getTapeKey = (req: http.IncomingMessage, matchStrategy: MatchStrategy): string => {
+  const key = buildRequestSignature(req, matchStrategy)
   return crypto.createHash('md5').update(key).digest('hex')
 }
 
@@ -56,12 +95,14 @@ const createTapeRecord = (
   proxyRes: http.IncomingMessage,
   bodyBuffer: Buffer,
   redactedHeaders: string[],
+  matchStrategy: MatchStrategy,
 ): TapeRecord => ({
   schemaVersion: CURRENT_SCHEMA_VERSION,
   meta: {
     url: req.url,
     method: req.method,
     timestamp: new Date().toISOString(),
+    matchStrategy,
   },
   statusCode: proxyRes.statusCode || 200,
   headers: redactHeaders(
@@ -106,10 +147,18 @@ const runServe = (opts: ServeOptions): void => {
   const redactedHeaders = parseCsv(opts.redactHeader)
   const statsIntervalSec = parseNonNegativeInt(opts.statsInterval, 'stats-interval')
   const statsJson = opts.statsJson
+  const matchStrategy = opts.matchStrategy
 
   const validModes: Mode[] = ['record', 'replay', 'hybrid']
   if (!validModes.includes(mode)) {
     throw new Error(`Invalid mode: ${mode}. Expected one of: ${validModes.join(', ')}`)
+  }
+
+  const validMatchStrategies: MatchStrategy[] = ['exact', 'normalized']
+  if (!validMatchStrategies.includes(matchStrategy)) {
+    throw new Error(
+      `Invalid match strategy: ${matchStrategy}. Expected one of: ${validMatchStrategies.join(', ')}`,
+    )
   }
 
   fs.ensureDirSync(tapesDir)
@@ -199,7 +248,7 @@ const runServe = (opts: ServeOptions): void => {
       }
     })
 
-    const tapeKey = getTapeKey(req)
+    const tapeKey = getTapeKey(req, matchStrategy)
     const tapePath = path.join(tapesDir, `${tapeKey}.json`)
 
     if (mode === 'replay') {
@@ -244,8 +293,8 @@ const runServe = (opts: ServeOptions): void => {
       const shouldRecord = recordByRequest.get(req) ?? true
 
       if (shouldRecord) {
-        const tapeData = createTapeRecord(req, proxyRes, bodyBuffer, redactedHeaders)
-        const tapeKey = getTapeKey(req)
+        const tapeData = createTapeRecord(req, proxyRes, bodyBuffer, redactedHeaders, matchStrategy)
+        const tapeKey = getTapeKey(req, matchStrategy)
         const tapePath = path.join(tapesDir, `${tapeKey}.json`)
         fs.writeJsonSync(tapePath, tapeData, { spaces: 2 })
         console.log(`${timestamp()} ${chalk.cyan('💾 SAVED')} ${req.method} ${req.url}`)
@@ -299,6 +348,7 @@ const runServe = (opts: ServeOptions): void => {
   console.log(`   ${chalk.dim('Target:')} ${targetUrl}`)
   console.log(`   ${chalk.dim('Port:')}   http://localhost:${port}`)
   console.log(`   ${chalk.dim('Dir:')}    ${tapesDir}`)
+
   if (mode === 'hybrid') {
     console.log(`   ${chalk.dim('Record Miss:')} ${recordOnMiss}`)
   }
@@ -311,6 +361,8 @@ const runServe = (opts: ServeOptions): void => {
   if (statsJson) {
     console.log(`   ${chalk.dim('Stats Format:')} json`)
   }
+
+  console.log(`   ${chalk.dim('Match Strategy:')} ${matchStrategy}`)
   console.log('')
 
   server.listen(port)
@@ -421,6 +473,7 @@ const addServeOptions = (command: Command): Command =>
     )
     .option('--stats-interval <seconds>', 'Emit runtime stats every N seconds (0 disables)', '0')
     .option('--stats-json', 'Emit stats in JSON format', false)
+    .option('--match-strategy <strategy>', 'Tape matching strategy: exact or normalized', 'exact')
 
 const run = (): void => {
   const argv = process.argv

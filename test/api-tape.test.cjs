@@ -305,6 +305,54 @@ test('record mode redacts configured response headers in saved tape', async () =
   }
 })
 
+test('normalized match strategy replays regardless of query order', async () => {
+  const upstreamPort = await getFreePort()
+  const proxyPort = await getFreePort()
+  const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'api-tape-normalized-'))
+
+  let upstreamHits = 0
+  const upstream = http.createServer((req, res) => {
+    upstreamHits += 1
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ upstreamHits, url: req.url }))
+  })
+  await new Promise((resolve) => upstream.listen(upstreamPort, resolve))
+
+  let cli
+  try {
+    cli = await startCli({
+      target: `http://127.0.0.1:${upstreamPort}`,
+      port: proxyPort,
+      dir: tmpDir,
+      mode: 'record',
+      extraArgs: ['--match-strategy', 'normalized'],
+    })
+
+    const first = await requestWithRetry(`http://127.0.0.1:${proxyPort}/search?b=2&a=1`)
+    assert.equal(first.statusCode, 200)
+    assert.equal(upstreamHits, 1)
+
+    await stopProcess(cli.child)
+
+    cli = await startCli({
+      target: `http://127.0.0.1:${upstreamPort}`,
+      port: proxyPort,
+      dir: tmpDir,
+      mode: 'replay',
+      extraArgs: ['--match-strategy', 'normalized'],
+    })
+
+    const replay = await requestWithRetry(`http://127.0.0.1:${proxyPort}/search?a=1&b=2`)
+    assert.equal(replay.statusCode, 200)
+    assert.equal(replay.headers['x-api-tape'], 'Replayed')
+    assert.equal(upstreamHits, 1)
+  } finally {
+    await stopProcess(cli && cli.child)
+    await new Promise((resolve) => upstream.close(resolve))
+    await fsp.rm(tmpDir, { recursive: true, force: true })
+  }
+})
+
 test('serve mode emits periodic and final stats in json format', async () => {
   const upstreamPort = await getFreePort()
   const proxyPort = await getFreePort()

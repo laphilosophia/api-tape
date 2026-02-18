@@ -1,4 +1,5 @@
 export type Mode = 'record' | 'replay' | 'hybrid'
+export type MatchStrategy = 'exact' | 'normalized'
 
 export interface TapeRecord {
   schemaVersion?: number
@@ -6,6 +7,7 @@ export interface TapeRecord {
     url?: string
     method?: string
     timestamp?: string
+    matchStrategy?: MatchStrategy
   }
   statusCode: number
   headers: Record<string, string | string[] | undefined>
@@ -21,6 +23,7 @@ export interface ServeOptions {
   redactHeader: string
   statsInterval: string
   statsJson: boolean
+  matchStrategy: MatchStrategy
 }
 
 export interface ServeMetrics {
