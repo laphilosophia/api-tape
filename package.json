@@ -16,7 +16,7 @@
   "scripts": {
     "build": "tsup src/index.ts --format cjs --clean",
     "prepublishOnly": "npm run build",
-    "test": "npm run build && node --test test/**/*.test.cjs"
+    "test": "npm run build && node --test \"test/**/*.test.cjs\""
   },
   "keywords": [
     "api",
