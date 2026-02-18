@@ -1,6 +1,6 @@
 {
   "name": "@laphilosophia/api-tape",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Record and Replay HTTP API responses for offline development",
   "main": "dist/index.js",
   "bin": {
