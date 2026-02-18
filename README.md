@@ -17,7 +17,7 @@ API Tape is a zero-config CLI tool that acts as a transparent HTTP proxy. It rec
 - **Binary Safe** — Handles images, compressed responses, and any content type
 - **Replay Header** — Responses include `X-Api-Tape: Replayed` for easy debugging
 - **Versioned Tape Schema** — Each tape includes `schemaVersion` for compatibility checks
-- **Match Strategies** — `exact` and `normalized` matching for better replay hit rates
+- **Match Strategies** — `exact`, `normalized`, and `body-aware` matching for better replay hit rates
 
 ---
 
@@ -30,7 +30,7 @@ npm install -g @laphilosophia/api-tape
 Or use it directly with npx:
 
 ```bash
-npx api-tape --target "https://api.example.com" --mode record
+npx @laphilosophia/api-tape --target "https://api.example.com" --mode record
 ```
 
 ---
@@ -96,7 +96,7 @@ Both legacy mode (`tape --target ...`) and explicit serve command (`tape serve -
 | `--redact-json-path <paths>`  | Comma-separated JSON paths to redact in JSON response bodies   | —         |
 | `--stats-interval <seconds>`  | Emit runtime metrics every N seconds (`0` disables)            | `0`       |
 | `--stats-json`                | Emit metrics as JSON lines                                     | `false`   |
-| `--match-strategy <strategy>` | Tape matching strategy: `exact` or `normalized`                | `exact`   |
+| `--match-strategy <strategy>` | Tape matching strategy: `exact`, `normalized`, or `body-aware` | `exact`   |
 
 ### Runtime stats
 
@@ -126,6 +126,7 @@ tape serve --target "https://api.example.com" --mode record \
 
 - `exact` (default): hashes `METHOD|URL` as-is.
 - `normalized`: sorts query params before hashing, so `/search?a=1&b=2` and `/search?b=2&a=1` map to the same tape.
+- `body-aware`: uses normalized URL plus request body signature (JSON canonicalized when possible), useful for POST/PUT APIs sharing paths.
 
 ### Tape management commands
 

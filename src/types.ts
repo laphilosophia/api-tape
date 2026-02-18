@@ -1,5 +1,5 @@
 export type Mode = 'record' | 'replay' | 'hybrid'
-export type MatchStrategy = 'exact' | 'normalized'
+export type MatchStrategy = 'exact' | 'normalized' | 'body-aware'
 
 export interface TapeRecord {
   schemaVersion?: number

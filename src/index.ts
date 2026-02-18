@@ -6,6 +6,7 @@ import fs, { Mode } from 'fs-extra'
 import http from 'http'
 import httpProxy from 'http-proxy'
 import path from 'path'
+import { PassThrough } from 'stream'
 import { CURRENT_SCHEMA_VERSION } from './constants'
 import { MatchStrategy, ServeMetrics, ServeOptions, TapeRecord } from './types'
 import {
@@ -13,8 +14,63 @@ import {
   parseCsv,
   parseNonNegativeInt,
   parsePositiveInt,
+  stableStringify,
   timestamp,
 } from './utils'
+
+const getRequestBodySignature = (req: http.IncomingMessage, bodyBuffer: Buffer): string => {
+  if (bodyBuffer.length === 0) {
+    return ''
+  }
+
+  const contentType = readHeaderValue(req.headers['content-type']).toLowerCase()
+  if (contentType.includes('application/json')) {
+    try {
+      const parsed = JSON.parse(bodyBuffer.toString('utf8'))
+      return stableStringify(parsed)
+    } catch {
+      return bodyBuffer.toString('base64')
+    }
+  }
+
+  return bodyBuffer.toString('base64')
+}
+
+const collectRequestBody = (req: http.IncomingMessage): Promise<Buffer> =>
+  new Promise((resolve, reject) => {
+    // If the request has no body (e.g., standard GET/DELETE/HEAD), resolve immediately
+    if (
+      !req.readable ||
+      req.method === 'GET' ||
+      req.method === 'HEAD' ||
+      req.method === 'OPTIONS'
+    ) {
+      resolve(Buffer.alloc(0))
+      return
+    }
+
+    const chunks: Buffer[] = []
+
+    req.on('data', (chunk: Buffer) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+    })
+
+    req.on('end', () => {
+      resolve(Buffer.concat(chunks))
+    })
+
+    req.on('error', reject)
+  })
+
+const createProxyBuffer = (requestBody: Buffer): PassThrough | undefined => {
+  if (requestBody.length === 0) {
+    return undefined
+  }
+
+  const stream = new PassThrough()
+  stream.end(requestBody)
+  return stream
+}
 
 const normalizeUrl = (rawUrl: string | undefined): string => {
   if (!rawUrl) {
@@ -45,18 +101,30 @@ const normalizeUrl = (rawUrl: string | undefined): string => {
   return normalizedQuery ? `${pathname || '/'}?${normalizedQuery}` : pathname || '/'
 }
 
-const buildRequestSignature = (req: http.IncomingMessage, matchStrategy: MatchStrategy): string => {
+const buildRequestSignature = (
+  req: http.IncomingMessage,
+  matchStrategy: MatchStrategy,
+  requestBody: Buffer,
+): string => {
   const method = req.method || 'GET'
 
   if (matchStrategy === 'normalized') {
     return `${method}|${normalizeUrl(req.url)}`
   }
 
+  if (matchStrategy === 'body-aware') {
+    return `${method}|${normalizeUrl(req.url)}|${getRequestBodySignature(req, requestBody)}`
+  }
+
   return `${method}|${req.url}`
 }
 
-const getTapeKey = (req: http.IncomingMessage, matchStrategy: MatchStrategy): string => {
-  const key = buildRequestSignature(req, matchStrategy)
+const getTapeKey = (
+  req: http.IncomingMessage,
+  matchStrategy: MatchStrategy,
+  requestBody: Buffer,
+): string => {
+  const key = buildRequestSignature(req, matchStrategy, requestBody)
   return crypto.createHash('md5').update(key).digest('hex')
 }
 
@@ -237,7 +305,7 @@ const runServe = (opts: ServeOptions): void => {
     throw new Error(`Invalid mode: ${mode}. Expected one of: ${validModes.join(', ')}`)
   }
 
-  const validMatchStrategies: MatchStrategy[] = ['exact', 'normalized']
+  const validMatchStrategies: MatchStrategy[] = ['exact', 'normalized', 'body-aware']
   if (!validMatchStrategies.includes(matchStrategy)) {
     throw new Error(
       `Invalid match strategy: ${matchStrategy}. Expected one of: ${validMatchStrategies.join(', ')}`,
@@ -253,6 +321,7 @@ const runServe = (opts: ServeOptions): void => {
   })
 
   const recordByRequest = new WeakMap<http.IncomingMessage, boolean>()
+  const requestBodyByRequest = new WeakMap<http.IncomingMessage, Buffer>()
   const requestStartByResponse = new WeakMap<http.ServerResponse, number>()
   const metrics: ServeMetrics = {
     totalRequests: 0,
@@ -306,12 +375,13 @@ const runServe = (opts: ServeOptions): void => {
     res: http.ServerResponse,
     shouldRecord: boolean,
     logPrefix: string,
+    requestBody: Buffer,
   ): void => {
     recordByRequest.set(req, shouldRecord)
     metrics.upstreamRequests += 1
     console.log(`${timestamp()} ${logPrefix} ${req.method} ${req.url}`)
 
-    proxy.web(req, res, {}, (error) => {
+    proxy.web(req, res, { buffer: createProxyBuffer(requestBody) }, (error) => {
       metrics.upstreamErrors += 1
       console.error(chalk.red('Proxy Error:'), error.message)
       res.statusCode = 502
@@ -319,7 +389,7 @@ const runServe = (opts: ServeOptions): void => {
     })
   }
 
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     metrics.totalRequests += 1
     requestStartByResponse.set(res, Date.now())
 
@@ -331,7 +401,20 @@ const runServe = (opts: ServeOptions): void => {
       }
     })
 
-    const tapeKey = getTapeKey(req, matchStrategy)
+    let requestBody = Buffer.alloc(0)
+    if (matchStrategy === 'body-aware') {
+      try {
+        requestBody = (await collectRequestBody(req)) as Buffer<ArrayBuffer>
+      } catch {
+        res.statusCode = 400
+        res.end('Unable to read request body')
+        return
+      }
+    }
+
+    requestBodyByRequest.set(req, requestBody)
+
+    const tapeKey = getTapeKey(req, matchStrategy, requestBody)
     const tapePath = path.join(tapesDir, `${tapeKey}.json`)
 
     if (mode === 'replay') {
@@ -347,7 +430,7 @@ const runServe = (opts: ServeOptions): void => {
     }
 
     if (mode === 'record') {
-      proxyRequest(req, res, true, chalk.blue('● RECORD'))
+      proxyRequest(req, res, true, chalk.blue('● RECORD'), requestBody)
       return
     }
 
@@ -363,6 +446,7 @@ const runServe = (opts: ServeOptions): void => {
       res,
       recordOnMiss,
       recordOnMiss ? chalk.magenta('⇢ FALLBACK_RECORD') : chalk.magenta('⇢ FALLBACK_PROXY'),
+      requestBody,
     )
   })
 
@@ -373,7 +457,8 @@ const runServe = (opts: ServeOptions): void => {
 
     proxyRes.on('end', () => {
       const bodyBuffer = Buffer.concat(bodyChunks)
-      const shouldRecord = recordByRequest.get(req) ?? true
+      const shouldRecord =
+        recordByRequest.get(req) ?? (mode === 'record' || (mode === 'hybrid' && recordOnMiss))
 
       if (shouldRecord) {
         const tapeData = createTapeRecord(
@@ -384,7 +469,8 @@ const runServe = (opts: ServeOptions): void => {
           redactedJsonPaths,
           matchStrategy,
         )
-        const tapeKey = getTapeKey(req, matchStrategy)
+        const requestBody = requestBodyByRequest.get(req) || Buffer.alloc(0)
+        const tapeKey = getTapeKey(req, matchStrategy, requestBody)
         const tapePath = path.join(tapesDir, `${tapeKey}.json`)
         fs.writeJsonSync(tapePath, tapeData, { spaces: 2 })
         console.log(`${timestamp()} ${chalk.cyan('💾 SAVED')} ${req.method} ${req.url}`)
@@ -424,6 +510,7 @@ const runServe = (opts: ServeOptions): void => {
 
   process.once('SIGINT', () => shutdown('SIGINT'))
   process.once('SIGTERM', () => shutdown('SIGTERM'))
+  process.once('SIGBREAK', () => shutdown('SIGBREAK'))
 
   console.log(chalk.bold(`\n📼 API Tape Running`))
   console.log(
@@ -571,7 +658,11 @@ const addServeOptions = (command: Command): Command =>
     )
     .option('--stats-interval <seconds>', 'Emit runtime stats every N seconds (0 disables)', '0')
     .option('--stats-json', 'Emit stats in JSON format', false)
-    .option('--match-strategy <strategy>', 'Tape matching strategy: exact or normalized', 'exact')
+    .option(
+      '--match-strategy <strategy>',
+      'Tape matching strategy: exact, normalized, or body-aware',
+      'exact',
+    )
 
 const run = (): void => {
   const argv = process.argv
@@ -581,7 +672,7 @@ const run = (): void => {
     const legacy = addServeOptions(new Command())
       .name('api-tape')
       .description('Record and Replay HTTP API responses for offline development.')
-      .version('1.5.0')
+      .version('1.6.0')
       .action((options: ServeOptions) => {
         runServe(options)
       })
@@ -595,7 +686,7 @@ const run = (): void => {
   program
     .name('api-tape')
     .description('Record and Replay HTTP API responses for offline development.')
-    .version('1.5.0')
+    .version('1.6.0')
 
   addServeOptions(program.command('serve').description('Run API Tape proxy server')).action(
     (options: ServeOptions) => {

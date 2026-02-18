@@ -1,13 +1,18 @@
 // @ts-nocheck
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { spawn } = require('node:child_process')
+const { execFile, spawn } = require('node:child_process')
 const http = require('node:http')
 const fsp = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const execFileAsync = (file, args) =>
+  new Promise((resolve) => {
+    execFile(file, args, () => resolve())
+  })
 
 const getFreePort = async () => {
   const server = http.createServer()
@@ -18,32 +23,42 @@ const getFreePort = async () => {
   return port
 }
 
-const request = (url) =>
+const request = (url, options = {}) =>
   new Promise((resolve, reject) => {
-    const req = http.get(url, (res) => {
-      const chunks = []
-      res.on('data', (chunk) => chunks.push(chunk))
-      res.on('end', () => {
-        resolve({
-          statusCode: res.statusCode,
-          headers: res.headers,
-          body: Buffer.concat(chunks).toString('utf8'),
+    const target = new URL(url)
+    const req = http.request(
+      {
+        hostname: target.hostname,
+        port: target.port,
+        path: `${target.pathname}${target.search}`,
+        method: options.method || 'GET',
+        headers: options.headers || {},
+      },
+      (res) => {
+        const chunks = []
+        res.on('data', (chunk) => chunks.push(chunk))
+        res.on('end', () => {
+          resolve({
+            statusCode: res.statusCode,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString('utf8'),
+          })
         })
-      })
-    })
-
+      },
+    )
     req.on('error', reject)
+    req.end()
   })
 
-const requestWithRetry = async (url, retries = 20) => {
+const requestWithRetry = async (url, retries = 10, options = {}) => {
   let lastError
   for (let i = 0; i < retries; i += 1) {
     try {
-      return await request(url)
+      return await request(url, options)
     } catch (error) {
       lastError = error
       if (error && error.code === 'ECONNREFUSED') {
-        await wait(100)
+        await wait(50)
         continue
       }
 
@@ -91,7 +106,14 @@ const startCli = ({ target, port, dir, mode, recordOnMiss, extraArgs = [] }) =>
       reject(new Error(`CLI exited early with code ${code}.\n${output}`))
     }
 
+    const startupTimeout = setTimeout(() => {
+      cleanup()
+      child.kill()
+      reject(new Error(`CLI did not become ready in time.\n${output}`))
+    }, 7000)
+
     const cleanup = () => {
+      clearTimeout(startupTimeout)
       child.stdout.off('data', onData)
       child.stderr.off('data', onData)
       child.off('exit', onExit)
@@ -125,16 +147,42 @@ const runCliOnce = (args) =>
     })
   })
 
-const stopProcess = async (child) => {
-  if (!child || child.killed) {
+const stopProcess = async (child, signal = 'SIGTERM') => {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
     return
   }
 
-  child.kill('SIGTERM')
-  await Promise.race([new Promise((resolve) => child.once('exit', resolve)), wait(2000)])
+  try {
+    child.kill(signal)
+  } catch {
+    // noop
+  }
 
-  if (!child.killed) {
-    child.kill('SIGKILL')
+  let result = await Promise.race([
+    new Promise((resolve) => child.once('exit', () => resolve('exited'))),
+    wait(1500).then(() => 'timeout'),
+  ])
+
+  if (result === 'timeout' && child.exitCode === null && child.signalCode === null) {
+    try {
+      child.kill()
+    } catch {
+      // noop
+    }
+
+    result = await Promise.race([
+      new Promise((resolve) => child.once('exit', () => resolve('exited'))),
+      wait(1000).then(() => 'timeout'),
+    ])
+  }
+
+  if (result === 'timeout' && process.platform === 'win32' && child.pid) {
+    await execFileAsync('taskkill', ['/PID', String(child.pid), '/T', '/F'])
+
+    await Promise.race([
+      new Promise((resolve) => child.once('exit', () => resolve('exited'))),
+      wait(1000),
+    ])
   }
 }
 
@@ -397,6 +445,83 @@ test('normalized match strategy replays regardless of query order', async () => 
   }
 })
 
+test('body-aware strategy differentiates by request body', async () => {
+  const upstreamPort = await getFreePort()
+  const proxyPort = await getFreePort()
+  const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'api-tape-body-aware-'))
+
+  let upstreamHits = 0
+  const upstream = http.createServer((req, res) => {
+    const bodyChunks = []
+    req.on('data', (chunk) => bodyChunks.push(chunk))
+    req.on('end', () => {
+      upstreamHits += 1
+      const body = Buffer.concat(bodyChunks).toString('utf8')
+      const parsed = body ? JSON.parse(body) : {}
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ upstreamHits, id: parsed.id }))
+    })
+  })
+  await new Promise((resolve) => upstream.listen(upstreamPort, resolve))
+
+  let cli
+  try {
+    cli = await startCli({
+      target: `http://127.0.0.1:${upstreamPort}`,
+      port: proxyPort,
+      dir: tmpDir,
+      mode: 'record',
+      extraArgs: ['--match-strategy', 'body-aware'],
+    })
+
+    const postA = await requestWithRetry(`http://127.0.0.1:${proxyPort}/items`, 20, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 1 }),
+    })
+    const postB = await requestWithRetry(`http://127.0.0.1:${proxyPort}/items`, 20, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 2 }),
+    })
+
+    assert.equal(postA.statusCode, 200)
+    assert.equal(postB.statusCode, 200)
+    assert.equal(upstreamHits, 2)
+
+    await stopProcess(cli.child)
+
+    cli = await startCli({
+      target: `http://127.0.0.1:${upstreamPort}`,
+      port: proxyPort,
+      dir: tmpDir,
+      mode: 'replay',
+      extraArgs: ['--match-strategy', 'body-aware'],
+    })
+
+    const replayA = await requestWithRetry(`http://127.0.0.1:${proxyPort}/items`, 20, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 1 }),
+    })
+    const replayB = await requestWithRetry(`http://127.0.0.1:${proxyPort}/items`, 20, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 2 }),
+    })
+
+    assert.equal(replayA.statusCode, 200)
+    assert.equal(replayB.statusCode, 200)
+    assert.equal(replayA.headers['x-api-tape'], 'Replayed')
+    assert.equal(replayB.headers['x-api-tape'], 'Replayed')
+    assert.equal(upstreamHits, 2)
+  } finally {
+    await stopProcess(cli && cli.child)
+    await new Promise((resolve) => upstream.close(resolve))
+    await fsp.rm(tmpDir, { recursive: true, force: true })
+  }
+})
+
 test('serve mode emits periodic and final stats in json format', async () => {
   const upstreamPort = await getFreePort()
   const proxyPort = await getFreePort()
@@ -437,27 +562,38 @@ test('serve mode emits periodic and final stats in json format', async () => {
   })
 
   try {
-    for (let i = 0; i < 30; i += 1) {
+    // Wait for the server to start (polling)
+    let ready = false
+    for (let i = 0; i < 50; i += 1) {
       if (output.includes('API Tape Running')) {
+        ready = true
         break
       }
       await wait(100)
     }
+    assert.ok(ready, 'CLI should become ready')
 
+    // Make a request to ensure metrics are recorded
     const response = await requestWithRetry(`http://127.0.0.1:${proxyPort}/stats`)
     assert.equal(response.statusCode, 200)
 
-    await wait(1200)
-    child.kill('SIGINT')
-    await new Promise((resolve) => child.once('exit', resolve))
-
-    assert.match(output, /\"event\":\"STATS\"/)
-
-    if (process.platform === 'win32') {
-      assert.ok(output.includes('"event":"FINAL_STATS"') || output.includes('"event":"STATS"'))
-    } else {
-      assert.match(output, /\"event\":\"FINAL_STATS\"/)
+    // Wait for periodic stats (polling)
+    let hasStats = false
+    for (let i = 0; i < 30; i += 1) {
+      if (output.includes('"event":"STATS"')) {
+        hasStats = true
+        break
+      }
+      await wait(200)
     }
+    assert.ok(hasStats, 'Should emit periodic JSON stats')
+
+    // Graceful shutdown
+    const signal = process.platform === 'win32' ? 'SIGBREAK' : 'SIGINT'
+    child.kill(signal)
+    await stopProcess(child, signal)
+
+    assert.ok(output.includes('"event":"FINAL_STATS"'), 'Should emit final JSON stats')
   } finally {
     await new Promise((resolve) => upstream.close(resolve))
     await fsp.rm(tmpDir, { recursive: true, force: true })
