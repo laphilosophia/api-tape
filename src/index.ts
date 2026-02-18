@@ -7,6 +7,7 @@ import http from 'http'
 import httpProxy from 'http-proxy'
 import path from 'path'
 import { PassThrough } from 'stream'
+import pkg from '../package.json'
 import { CURRENT_SCHEMA_VERSION } from './constants'
 import { MatchStrategy, ServeMetrics, ServeOptions, TapeRecord } from './types'
 import {
@@ -485,6 +486,7 @@ const runServe = (opts: ServeOptions): void => {
   })
 
   let metricsTimer: NodeJS.Timeout | undefined
+  let isShuttingDown = false
 
   if (statsIntervalSec > 0) {
     metricsTimer = setInterval(() => {
@@ -492,13 +494,22 @@ const runServe = (opts: ServeOptions): void => {
     }, statsIntervalSec * 1000)
   }
 
-  const shutdown = (signal: NodeJS.Signals): void => {
+  const shutdown = (_signal: NodeJS.Signals): void => {
+    if (isShuttingDown) {
+      return
+    }
+    isShuttingDown = true
+
     if (metricsTimer) {
       clearInterval(metricsTimer)
       metricsTimer = undefined
     }
 
+    if (statsIntervalSec > 0) {
+      printMetrics(metrics, statsJson, 'STATS')
+    }
     printMetrics(metrics, statsJson, 'FINAL_STATS')
+
     server.close(() => {
       process.exit(0)
     })
@@ -672,7 +683,7 @@ const run = (): void => {
     const legacy = addServeOptions(new Command())
       .name('api-tape')
       .description('Record and Replay HTTP API responses for offline development.')
-      .version('1.6.0')
+      .version(pkg.version)
       .action((options: ServeOptions) => {
         runServe(options)
       })
@@ -686,7 +697,7 @@ const run = (): void => {
   program
     .name('api-tape')
     .description('Record and Replay HTTP API responses for offline development.')
-    .version('1.6.0')
+    .version(pkg.version)
 
   addServeOptions(program.command('serve').description('Run API Tape proxy server')).action(
     (options: ServeOptions) => {

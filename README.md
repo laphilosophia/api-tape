@@ -110,7 +110,7 @@ For machine-readable output:
 tape serve --target "https://jsonplaceholder.typicode.com" --stats-interval 10 --stats-json
 ```
 
-On shutdown, API Tape always prints a final summary (`FINAL_STATS`).
+On shutdown, API Tape flushes one immediate `STATS` snapshot (if interval is enabled) and always prints a final summary (`FINAL_STATS`).
 
 ### Redaction options
 
