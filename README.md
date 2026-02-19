@@ -192,6 +192,22 @@ A GitHub Actions workflow runs `npm test` on both Linux and Windows for pushes a
 
 ---
 
+---
+
+## Contributing
+
+We welcome contributions! Please see our [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines on how to get started. All participants are expected to follow our [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
+
+## Security
+
+To report a security vulnerability, please use the process described in [SECURITY.md](./SECURITY.md).
+
+## Support
+
+If you need help using API Tape, check our [SUPPORT.md](./SUPPORT.md) or join the conversation in [GitHub Discussions](https://github.com/laphilosophia/api-tape/discussions).
+
+---
+
 ## Use Cases
 
 - **Offline Development** — Work without internet or VPN
