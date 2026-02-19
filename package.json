@@ -1,7 +1,7 @@
 {
   "name": "@laphilosophia/api-tape",
   "version": "1.6.1",
-  "description": "Record and Replay HTTP API responses for offline development",
+  "description": "High-integrity HTTP proxy for deterministic API record & replay. Features non-deterministic matching (canonical JSON/Query), sensitive data redaction, and deep forensics via CLI management.",
   "main": "dist/index.js",
   "bin": {
     "tape": "./dist/index.js",
@@ -27,9 +27,13 @@
     "offline",
     "testing",
     "http",
-    "vcr"
+    "vcr",
+    "deterministic",
+    "redaction",
+    "forensics",
+    "canonical-json"
   ],
-  "author": "Erdem Arslan",
+  "author": "Erdem Arslan <me@erdem.work>",
   "license": "MIT",
   "repository": {
     "type": "git",

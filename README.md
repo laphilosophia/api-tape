@@ -1,23 +1,23 @@
 # API Tape
 
-**Record and Replay HTTP API responses for offline development.**
+**High-integrity HTTP proxy for deterministic API record & replay.**
 
 API Tape is a zero-config CLI tool that acts as a transparent HTTP proxy. It records API responses to local JSON files ("tapes") and replays them instantly—perfect for offline development, flaky API testing, and reproducible demos.
+
+> [!NOTE]
+> **v1.6.1 Highlights**: Now includes a full CLI management suite (`tape`), advanced Match Strategies for non-deterministic APIs, and deep JSON/Header redaction for security compliance.
 
 ## Features
 
 - **Record Mode** — Proxies requests to your target API and saves responses
 - **Replay Mode** — Serves cached responses instantly from disk
 - **Hybrid Mode** — Replays cached tapes, falls back to upstream on cache miss
-- **Tape Management Commands** — List, inspect, clear, and prune tapes from CLI
-- **Header Redaction** — Mask sensitive response headers before writing tapes
-- **JSON Body Redaction** — Redact selected JSON paths before persisting response bodies
-- **Runtime Metrics** — Periodic and shutdown stats for replay hit/miss, upstream calls, and latency
-- **Zero Config** — Works out of the box with sensible defaults
-- **Binary Safe** — Handles images, compressed responses, and any content type
+- **Forensic CLI** — List, inspect, clear, and prune tapes with `tape`
+- **Security Redaction** — Mask sensitive response headers and JSON body paths
+- **Non-Deterministic Matching** — Handle shifting query params and unstable JSON bodies
+- **Runtime Metrics** — Real-time and shutdown stats for hit rates and latency
+- **Binary Safe** — Handles images, compressed payloads, and any content type
 - **Replay Header** — Responses include `X-Api-Tape: Replayed` for easy debugging
-- **Versioned Tape Schema** — Each tape includes `schemaVersion` for compatibility checks
-- **Match Strategies** — `exact`, `normalized`, and `body-aware` matching for better replay hit rates
 
 ---
 
@@ -92,8 +92,8 @@ Both legacy mode (`tape --target ...`) and explicit serve command (`tape serve -
 | `-p, --port <number>`         | Local server port                                              | `8080`    |
 | `-d, --dir <path>`            | Directory to save tapes                                        | `./tapes` |
 | `--record-on-miss <boolean>`  | In hybrid mode, save upstream response when tape is missing    | `true`    |
-| `--redact-header <headers>`   | Comma-separated response header names to redact in saved tapes | —         |
-| `--redact-json-path <paths>`  | Comma-separated JSON paths to redact in JSON response bodies   | —         |
+| `--redact-header <headers>`   | Comma-separated **response** header names to redact            | —         |
+| `--redact-json-path <paths>`  | Comma-separated JSON paths to redact in response bodies        | —         |
 | `--stats-interval <seconds>`  | Emit runtime metrics every N seconds (`0` disables)            | `0`       |
 | `--stats-json`                | Emit metrics as JSON lines                                     | `false`   |
 | `--match-strategy <strategy>` | Tape matching strategy: `exact`, `normalized`, or `body-aware` | `exact`   |
@@ -122,19 +122,34 @@ tape serve --target "https://api.example.com" --mode record \
 
 `--redact-json-path` applies only when response `content-type` is JSON.
 
-### Match strategy
+### Match Strategies
 
-- `exact` (default): hashes `METHOD|URL` as-is.
-- `normalized`: sorts query params before hashing, so `/search?a=1&b=2` and `/search?b=2&a=1` map to the same tape.
-- `body-aware`: uses normalized URL plus request body signature (JSON canonicalized when possible), useful for POST/PUT APIs sharing paths.
+Use these strategies to handle non-deterministic API behaviors and improve replay hit rates:
+
+- **`exact`** (default): Hashes the literal `METHOD|URL`. Use for simple, static APIs.
+- **`normalized`**: Canonicalizes query parameters by sorting them alphabetically.
+  - Transforms: `/search?page=1&q=test` → `/search?q=test&page=1`
+  - _Benefit_: Drastically improves hit rates for clients that send query params in varying orders.
+- **`body-aware`**: Combines the normalized URL with a canonicalized request body signature.
+  - Handles: Differences in JSON key order or spacing in POST/PUT requests.
+  - _Benefit_: Essential for GraphQL or complex REST APIs where the same URL is used for different operations based on the body payload.
 
 ### Tape management commands
 
+Manage your forensic substrate with built-in tape utilities:
+
 ```bash
-tape tape list --dir ./tapes
-tape tape inspect <hash> --dir ./tapes
-tape tape clear --yes --dir ./tapes
-tape tape prune --older-than 30 --dir ./tapes
+# List all recorded tapes with their method, route, and timestamp
+tape list --dir ./tapes
+
+# Inspect a specific tape's metadata, status, and headers
+tape inspect <hash> --dir ./tapes
+
+# Clear all tapes from a directory (requires --yes confirmation)
+tape clear --yes --dir ./tapes
+
+# Prune tapes older than N days to keep your local environment clean
+tape prune --older-than 30 --dir ./tapes
 ```
 
 ---
