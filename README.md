@@ -1,11 +1,11 @@
-# API Tape
+# 🖭 API Tape
 
 **High-integrity HTTP proxy for deterministic API record & replay.**
 
 API Tape is a zero-config CLI tool that acts as a transparent HTTP proxy. It records API responses to local JSON files ("tapes") and replays them instantly—perfect for offline development, flaky API testing, and reproducible demos.
 
 > [!NOTE]
-> **v1.6.1 Highlights**: Now includes a full CLI management suite (`tape`), advanced Match Strategies for non-deterministic APIs, and deep JSON/Header redaction for security compliance.
+> **v1.6.2 Highlights**: Introduced a structural **Graceful Shutdown** mechanism for all platforms (including Windows), a new **Comprehensive Examples** suite, and improved test reliability in CI environments.
 
 ## Features
 

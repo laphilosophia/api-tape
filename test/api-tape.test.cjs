@@ -89,7 +89,7 @@ const startCli = ({ target, port, dir, mode, recordOnMiss, extraArgs = [] }) =>
 
     const child = spawn('node', args, {
       cwd: process.cwd(),
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     })
 
     let output = ''
@@ -128,7 +128,7 @@ const runCliOnce = (args) =>
   new Promise((resolve) => {
     const child = spawn('node', ['dist/index.js', ...args], {
       cwd: process.cwd(),
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     })
 
     let stdout = ''
@@ -152,10 +152,12 @@ const stopProcess = async (child, signal = 'SIGTERM') => {
     return
   }
 
-  try {
-    child.kill(signal)
-  } catch {
-    // noop
+  if (signal) {
+    try {
+      child.kill(signal)
+    } catch {
+      // noop
+    }
   }
 
   let result = await Promise.race([
@@ -550,7 +552,7 @@ test('serve mode emits periodic and final stats in json format', async () => {
       '1',
       '--stats-json',
     ],
-    { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] },
+    { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] },
   )
 
   let output = ''
@@ -589,9 +591,12 @@ test('serve mode emits periodic and final stats in json format', async () => {
     assert.ok(hasStats, 'Should emit periodic JSON stats')
 
     // Graceful shutdown
-    const signal = process.platform === 'win32' ? 'SIGBREAK' : 'SIGINT'
-    child.kill(signal)
-    await stopProcess(child, signal)
+    if (process.platform === 'win32') {
+      child.stdin.end()
+    } else {
+      child.kill('SIGINT')
+    }
+    await stopProcess(child, null)
 
     assert.ok(output.includes('"event":"FINAL_STATS"'), 'Should emit final JSON stats')
   } finally {

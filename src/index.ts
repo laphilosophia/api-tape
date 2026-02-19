@@ -494,7 +494,7 @@ const runServe = (opts: ServeOptions): void => {
     }, statsIntervalSec * 1000)
   }
 
-  const shutdown = (_signal: NodeJS.Signals): void => {
+  const shutdown = (_signal: NodeJS.Signals | string): void => {
     if (isShuttingDown) {
       return
     }
@@ -522,6 +522,11 @@ const runServe = (opts: ServeOptions): void => {
   process.once('SIGINT', () => shutdown('SIGINT'))
   process.once('SIGTERM', () => shutdown('SIGTERM'))
   process.once('SIGBREAK', () => shutdown('SIGBREAK'))
+
+  if (!process.stdin.isTTY) {
+    process.stdin.resume()
+    process.stdin.once('close', () => shutdown('STDIN_EOF'))
+  }
 
   console.log(chalk.bold(`\n📼 API Tape Running`))
   console.log(
@@ -553,7 +558,9 @@ const runServe = (opts: ServeOptions): void => {
     console.log(`   ${chalk.dim('Stats Format:')} json`)
   }
 
-  console.log(`   ${chalk.dim('Match Strategy:')} ${matchStrategy}`)
+  if (matchStrategy) {
+    console.log(`   ${chalk.dim('Match Strategy:')} ${matchStrategy}`)
+  }
   console.log('')
 
   server.listen(port)
